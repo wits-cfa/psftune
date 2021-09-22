@@ -66,20 +66,30 @@ def ends(theta, npix):
     fx = lambda x: slope*(x - x0) + y0
     fy = lambda y: (y-y0)/slope + x0
 
+    # avoid boundary
+    def avoid(x):
+        if x==npix:
+            return x-1
+        else:
+            return x
     # Top/Bottom boundary
     if abs(slope) > 1:
         y1 = 0
         x1 = fy(y1)
+        x1 = avoid(x1)
 
         y2 = npix - 1
         x2 = fy(y2)
+        x2 = avoid(x2)
     # Left/Right boundary
     elif abs(slope) < 1:
         x1 = 0
         y1 = fx(x1)
+        y1 = avoid(y1)
 
         x2 = npix - 1
         y2 = fx(x2)
+        y2 = avoid(y2)
 
     if slope>0:
         return np.array([[x1,y1], [x2,y2]], dtype=int)
@@ -129,8 +139,9 @@ def sidelobe_area(profile, maxtp):
 
 
 class PSFObject(object):
-    def __init__(self, name):
+    def __init__(self, name, channel=0):
         self.name = name
+        self.channel = channel
         self.angles = []
         self.profiles = []
         self.turning_points = []
@@ -138,8 +149,23 @@ class PSFObject(object):
 
         with fitsio.open(self.name) as hdul:
             self.hdu = hdul[0]
-            self.data = self.hdu.data[0,0,...]
             self.hdr = self.hdu.header
+
+            naxis = self.hdr['NAXIS']
+            # find frequency axis
+            for i in range(1, naxis + 1):
+                if self.hdr['CTYPE%d' % i].lower().startswith("freq"):
+                    freq = naxis - i  # fits to numpy indexing
+
+            ra, dec = naxis - 2, naxis - 1
+            slc = [0]*naxis
+            slc[ra] = slice(None)
+            slc[dec] = slice(None)
+            slc[freq] = self.channel
+
+
+            print(slc, self.hdu.data.shape)
+            self.data = self.hdu.data[tuple(slc)]
 
         self.npix = self.data.shape[0]
         self.scale = abs(self.hdr['CDELT1'])
@@ -157,7 +183,6 @@ class PSFObject(object):
             else:
                 ends_ = ends(theta, self.npix)
                 idxs = crosseccros(ends_)
-            
             profile = self.data[(idxs[:,0], idxs[:,1])]
             self.profiles.append(profile)
 
@@ -170,18 +195,22 @@ class PSFObject(object):
 
     
 @click.command()
-@click.argument("psfs", nargs=-1, type=click.File('rb'))
+@click.argument("psfs", nargs=-1, type=click.types.Path(writable=False))
+
+
+@click.option("--channel-index", "-ci", "channel", type=int, default=0,
+              help="Channel index if providing a multi-channel PSF. Default is 0")
 
 @click.option("--ignore-psf-fit", "-ipf", "nopsf", is_flag=True, 
-
               help="Ignore fitted PSF positiona angle.")
+
 @click.option("--angles", "-a", multiple=True, type=float,
               help="Angles (w.r.t horizontal in acw direction) which to take cross-sections." \
                    "If --ignore-psf-fit is not set, then the reference will be set to the fitted PSF position in the header")
 
 @click.option("--max-tp", "--m","maxtp", default=6, type=int,
               help="Maximimm number of turning points to consider when comparing PSFs")
-@click.option("--tolerance", "-tol","tol", default=0.05, type=float, 
+@click.option("--tolerance", "-tol","tol", default=0.05, type=float,
               help="Tolerance for how far from zero the first turning point of PSF can be along any angle")
 
 @click.option("--save", "-s", 
@@ -190,7 +219,7 @@ class PSFObject(object):
 @click.option("--savefig", "-sf","savefig", is_flag=True,
               help="Save plot of comparison of qualifying psfs (cross-section along major axis will be used)")
 
-def cli(psfs, nopsf, angles, maxtp, tol, save, savefig):
+def cli(psfs, nopsf, angles, maxtp, tol, save, savefig, channel):
     """
     Driver function
     """
@@ -199,7 +228,7 @@ def cli(psfs, nopsf, angles, maxtp, tol, save, savefig):
     angles = list(angles)
     save = save or "psftune_output.json"
     for name in psfs:
-        psf = PSFObject(name.name)
+        psf = PSFObject(name, channel)
         log.info(f"Loading PSF: {psf.name}")
 
         if not angles:
@@ -223,7 +252,9 @@ def cli(psfs, nopsf, angles, maxtp, tol, save, savefig):
         else:
             psf.metric = np.absolute(psf.turning_points).sum(axis=(0,1))
             tps_psf.append(psf)
-    
+    if len(tps_psf) == 0:
+        raise RuntimeError("None of the input PSFs made cut.")
+        
     neo = np.argmin([m.metric for m in tps_psf])
     names = [x.name for x in tps_psf]
     x = np.linspace(-psf.npix//2, psf.npix//2, psf.npix)*psf.scale
