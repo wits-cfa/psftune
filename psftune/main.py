@@ -4,7 +4,6 @@ import astropy.io.fits as fitsio
 import logging
 import pylab
 import json
-import sys
 
 # create logger
 log = logging.getLogger('simple_example')
@@ -24,7 +23,8 @@ ch.setFormatter(formatter)
 log.addHandler(ch)
 
 pi = np.pi
-mod2pi = lambda theta: theta%(2*pi)
+def mod2pi(theta):
+    return theta%(2*pi)
 
 def quadrant(theta):
     """
@@ -56,15 +56,16 @@ def ends(theta, npix):
 
     ndarray: numpy.array([[x1,y1], [x2,y2]], dtype=int)
     """
-    pi = np.pi
     theta = mod2pi(np.deg2rad(theta))
 
     x0 = npix//2
     y0 = npix//2
 
     slope = -np.tan(theta) # slope of line with no y-intercept
-    fx = lambda x: slope*(x - x0) + y0
-    fy = lambda y: (y-y0)/slope + x0
+    def fx(x):
+        return slope*(x - x0) + y0
+    def fy(y):
+        return (y-y0)/slope + x0
 
     # avoid boundary
     def avoid(x):
@@ -130,12 +131,6 @@ def turning_points(profile, n):
     log.info(f"Profile has {len(tp)} turning points")
 
     return tp
-
-
-def sidelobe_area(profile, maxtp):
-    """
-    """
-    return 0
 
 
 class PSFObject(object):
